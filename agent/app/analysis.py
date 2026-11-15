@@ -75,7 +75,7 @@ async def recurring_report() -> dict:
         try:
             skill = skills.get("recurring-issue-review")
             resp = await llm.client().chat.completions.create(
-                model=config.XAI_MODEL, temperature=0.2,
+                model=config.LLM_MODEL, temperature=0.2,
                 messages=[{"role": "system", "content": "You are a problem manager at a semiconductor backend site. "
                                                         f"Follow this skill:\n\n{skill.body}"},
                           {"role": "user", "content": "Data (JSON):\n" + json.dumps(data, default=str)[:12000]}])

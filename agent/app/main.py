@@ -23,8 +23,8 @@ class RunReq(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "agent", "llm_mode": config.llm_mode(),
-            "model": config.XAI_MODEL if config.llm_mode() == "llm" else None,
-            "provider": "xAI Grok" if config.llm_mode() == "llm" else "mock (rule-based)",
+            "model": config.LLM_MODEL if config.llm_mode() == "llm" else None,
+            "provider": config.llm_provider() if config.llm_mode() == "llm" else "mock (rule-based)",
             "max_tool_calls": config.MAX_TOOL_CALLS, "timeout_sec": config.TIMEOUT_SEC,
             "skills": len(skills.load_all())}
 
@@ -110,5 +110,5 @@ async def get_skill(name: str):
 @app.on_event("startup")
 async def _startup():
     logging.getLogger("agent").info("Agent started: mode=%s model=%s skills=%s", config.llm_mode(),
-                                    config.XAI_MODEL, ", ".join(skills.load_all()))
+                                    config.LLM_MODEL, ", ".join(skills.load_all()))
     asyncio.get_running_loop()
