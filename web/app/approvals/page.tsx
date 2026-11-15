@@ -1,4 +1,5 @@
 "use client";
+import { ClipboardCheck, History, ShieldCheck } from "lucide-react";
 import { type Action, useApi } from "@/lib/api";
 import { Card, Empty, ErrorBox, Loading, PageTitle } from "@/components/ui";
 import ActionCard from "@/components/ActionCard";
@@ -11,14 +12,15 @@ export default function Approvals() {
 
   return (
     <>
-      <PageTitle title="Approvals" sub="Agent proposals wait here. Nothing changes in the MES until a human approves. Approve = execute via PL/SQL action_pkg, then the agent verifies and resolves." />
-      <Card title={`Pending (${pending.data?.length ?? 0})`}>
+      <PageTitle title="Approvals" icon={ClipboardCheck}
+                 sub="Nothing changes on the shop floor until a person approves. Approve runs the action, then the agent checks the result." />
+      <Card title={`Waiting for approval (${pending.data?.length ?? 0})`} icon={ShieldCheck}>
         {pending.error ? <ErrorBox error={pending.error} onRetry={pending.reload} /> : !pending.data ? <Loading /> :
-          pending.data.length === 0 ? <Empty text="No pending actions. Run the agent on an incident to get a proposal." /> : (
+          pending.data.length === 0 ? <Empty icon={ClipboardCheck} text="No actions waiting. Run the agent on an incident to get a proposal." /> : (
             <div className="space-y-3">{pending.data.map((a) => <ActionCard key={a.id} a={a} onDone={reload} />)}</div>
           )}
       </Card>
-      <Card title="Recently decided" className="mt-4">
+      <Card title="Recently decided" icon={History} className="mt-4">
         {all.error ? <ErrorBox error={all.error} /> : !all.data ? <Loading /> : recent.length === 0 ? <Empty text="Nothing decided yet" /> : (
           <div className="space-y-3">{recent.map((a) => <ActionCard key={a.id} a={a} />)}</div>
         )}
