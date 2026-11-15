@@ -136,3 +136,48 @@ export default function AgentTrace({ steps, running }: { steps: Step[]; running:
     </ol>
   );
 }
+
+const ACTION_TEXT: Record<string, string> = {
+  release_lot_hold: "Release lot hold",
+  set_equipment_state: "Set equipment state / recipe",
+  reset_interface: "Reset equipment interface",
+  grant_user_role: "Grant user role",
+  escalate_to_group: "Escalate to support group",
+};
+
+/** One-glance summary of a run: what the agent found, what it proposes, and what the user should do next. */
+export function RunSummary({ steps, running, pendingApproval }: { steps: Step[]; running: boolean; pendingApproval: boolean }) {
+  if (running || steps.length === 0) return null;
+  const finals = steps.filter((s) => s.step_type === "final").map((s) => s.content);
+  const run = finals[0] ?? {};
+  const last = finals[finals.length - 1] ?? {};
+  const proposal = steps.find((s) => s.step_type === "proposal")?.content;
+  const verified = steps.some((s) => s.step_type === "verify" && s.content?.ok);
+  const secs = Math.max(0, Math.round((new Date(steps[steps.length - 1].created_at).getTime() - new Date(steps[0].created_at).getTime()) / 1000));
+
+  let tone = "border-line bg-raised", Icon: LucideIcon = Flag, headline = "Run finished";
+  if (last.status === "Resolved" || verified) {
+    tone = "border-emerald-800 bg-emerald-950/30"; Icon = CircleCheck; headline = "Fixed and verified by the agent - ticket resolved";
+  } else if (last.status === "Escalated") {
+    tone = "border-violet-800 bg-violet-950/30"; Icon = Hand; headline = `Handed over to ${proposal?.params?.group_name ?? "the support group"}`;
+  } else if (pendingApproval && proposal) {
+    tone = "border-accent/60 bg-accent/[0.06]"; Icon = Hand; headline = "Waiting for your approval - see the proposed action above";
+  } else if (run.status === "Failed" || run.status === "Timeout") {
+    tone = "border-rose-900 bg-rose-950/30"; Icon = AlertOctagon; headline = `Run ${String(run.status).toLowerCase()} - check the notices below`;
+  }
+
+  return (
+    <div className={`mb-4 rounded-md border p-4 ${tone}`}>
+      <div className="flex items-center gap-2 font-semibold text-zinc-50"><Icon className="h-5 w-5" /> {headline}</div>
+      <dl className="mt-3 grid gap-x-3 gap-y-1.5 text-sm sm:grid-cols-[130px_1fr]">
+        {run.root_cause && (<><dt className="text-zinc-500">Root cause</dt><dd className="text-zinc-200">{run.root_cause}</dd></>)}
+        {proposal && (<><dt className="text-zinc-500">Proposed fix</dt>
+          <dd className="text-zinc-200">{ACTION_TEXT[proposal.action_type] ?? proposal.action_type}
+            <span className="mono ml-2 text-zinc-500">{Object.values(proposal.params ?? {}).filter((v) => typeof v === "string" && v.length < 40).join(", ")}</span></dd></>)}
+        <dt className="text-zinc-500">Runbook</dt><dd className="mono text-zinc-300">{run.skill_used ?? "none (escalated)"}</dd>
+        <dt className="text-zinc-500">Effort</dt>
+        <dd className="text-zinc-400">{run.tool_calls ?? "-"} tool calls, {secs} s, {run.llm_mode === "llm" ? "LLM" : "mock planner"}</dd>
+      </dl>
+    </div>
+  );
+}

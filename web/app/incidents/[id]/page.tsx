@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { type Action, type Incident, type Run, type Step, ago, fmt, post, useApi, useUser } from "@/lib/api";
 import { Badge, Card, Empty, ErrorBox, Field, Loading, PriorityBadge, StatusBadge } from "@/components/ui";
-import AgentTrace from "@/components/AgentTrace";
+import AgentTrace, { RunSummary } from "@/components/AgentTrace";
 import ActionCard from "@/components/ActionCard";
 import Markdown from "@/components/Markdown";
 
@@ -280,7 +280,10 @@ export default function IncidentPage({ params }: { params: Promise<{ id: string 
             {steps.length === 0 && !running ? (
               <Empty icon={Bot} text={closed ? "Incident is closed." : "Run the agent: triage, similar incidents, skill, MCP tools, then a proposal for you to approve."} />
             ) : (
-              <AgentTrace steps={steps} running={running} />
+              <>
+                <RunSummary steps={steps} running={running} pendingApproval={pending.length > 0} />
+                <AgentTrace steps={steps} running={running} />
+              </>
             )}
           </Card>
           {past.length > 0 && (
