@@ -71,6 +71,9 @@ docker compose down -v && docker compose up -d --build
 | `LLM_BASE_URL` | `https://api.groq.com/openai/v1` | agent | Any OpenAI-compatible endpoint. xAI Grok: `https://api.x.ai/v1` + `LLM_MODEL=grok-4` |
 | `AGENT_MAX_TOOL_CALLS` | `12` | agent | Tool-call budget per run |
 | `AGENT_TIMEOUT_SEC` | `90` | agent | Timeout per run |
+| `AUTO_AGENT` | `false` | agent | Auto mode at start-up: the agent analyses every New ticket by itself (also a switch in the sidebar) |
+| `AUTO_POLL_SEC` | `20` | agent | How often auto mode looks for New tickets |
+| `LLM_REASONING_EFFORT` | `low` | agent | gpt-oss models only: low = faster, fewer tokens |
 | `SIM_ENABLED` | `false` | simulator | Inject random failures automatically |
 | `SIM_INTERVAL_SEC` | `300` | simulator | Seconds between injections |
 
@@ -95,6 +98,12 @@ One run (`POST /runs` -> live trace on `GET /runs/{id}/stream`, every step store
 7. **Propose** - `propose_action` creates a *Pending* `ACTION_REQUESTS` row (or escalates). Ticket -> `Pending`.
 8. **Human approves** in the web -> remedy-api -> PL/SQL `action_pkg.execute_action` -> agent **verifies** the MES
    state with MCP reads -> `resolve` with `resolved_by = agent_approved`. Escalations stay open for the team.
+
+### Auto mode
+
+Switch **Auto mode** on in the sidebar (or `AUTO_AGENT=true`). The agent then picks up the oldest *New* ticket that
+has never been analysed, one at a time, every 20 s. Only the analysis is automatic: every fix still waits in
+**Approvals** for a person. The sidebar also shows status lights for Oracle + Remedy API, the MCP server and the agent.
 
 ### Failure scenarios and skills
 
@@ -133,7 +142,8 @@ Plus `incident-triage` and `recurring-issue-review` (problem management report o
 4. **Approve and execute** -> the lot is `Waiting` on the shop floor, the ticket is `Resolved` with root cause, the audit log shows every step.
    Tickets without a skill can be closed by a person with **Resolve manually**.
 5. Repeat with `trackin-recipe-mismatch` (recipe loaded -> resolved) and `db-slow-query` (escalated to DBA, stays open).
-6. **Analysis** -> **Improvement report**. **Agent skills** shows every SKILL.md.
+6. Optional: switch **Auto mode** on, inject two failures and watch the agent pick them up by itself.
+7. **Analysis** -> **Improvement report**. **Agent skills** shows every SKILL.md.
 
 ## Automation scripts
 
