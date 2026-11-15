@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AlertCircle, ArrowRight, Bot, ClipboardCheck, Cpu, LayoutDashboard, PauseCircle, Repeat, Timer, TrendingUp, BarChart3 } from "lucide-react";
 import { useApi } from "@/lib/api";
 import { Badge, Card, Empty, ErrorBox, Kpi, Loading, PageTitle } from "@/components/ui";
+import HowItWorks from "@/components/HowItWorks";
 import { ParetoChart, TrendChart, type ParetoRow, type TrendRow } from "@/components/charts";
 
 interface Kpis {
@@ -21,6 +22,7 @@ export default function Dashboard() {
   return (
     <>
       <PageTitle title="Dashboard" icon={LayoutDashboard} sub="Incidents of the backend site (assembly, test, wafer test)" />
+      <HowItWorks />
       {k.error && <div className="mb-4"><ErrorBox error={k.error} onRetry={k.reload} /></div>}
       {k.loading && !k.data ? <Loading /> : k.data && (
         <>
