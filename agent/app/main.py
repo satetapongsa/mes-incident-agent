@@ -5,11 +5,13 @@ import asyncio
 import json
 import logging
 
+import httpx
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import analysis, config, hub, remedy, runner, skills
+from . import analysis, auto, config, hub, remedy, runner, skills
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 app = FastAPI(title="MES Incident Agent", version="1.0")
@@ -26,7 +28,39 @@ async def health():
             "model": config.LLM_MODEL if config.llm_mode() == "llm" else None,
             "provider": config.llm_provider() if config.llm_mode() == "llm" else "mock (rule-based)",
             "max_tool_calls": config.MAX_TOOL_CALLS, "timeout_sec": config.TIMEOUT_SEC,
-            "skills": len(skills.load_all())}
+            "skills": len(skills.load_all()), "auto": auto.STATE.enabled}
+
+
+@app.get("/status")
+async def status():
+    """Health of the services the agent depends on (for the status lights in the web UI)."""
+    async def check(url: str) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=3) as c:
+                return (await c.get(url)).status_code == 200
+        except httpx.HTTPError:
+            return False
+    mcp_health = config.MCP_URL.rsplit("/mcp", 1)[0] + "/health"
+    db_ok, mcp_ok = await asyncio.gather(check(f"{config.REMEDY_API_URL}/health"), check(mcp_health))
+    return {"database": db_ok, "remedy_api": db_ok, "mcp_server": mcp_ok, "agent": True,
+            "llm_mode": config.llm_mode(), "provider": config.llm_provider() if config.llm_mode() == "llm" else "mock",
+            "model": config.LLM_MODEL if config.llm_mode() == "llm" else None, "auto": auto.STATE.view()}
+
+
+class AutoReq(BaseModel):
+    enabled: bool
+
+
+@app.get("/auto")
+async def get_auto():
+    return auto.STATE.view()
+
+
+@app.post("/auto")
+async def set_auto(req: AutoReq):
+    auto.STATE.enabled = req.enabled
+    logging.getLogger("agent").info("auto mode %s", "ON" if req.enabled else "OFF")
+    return auto.STATE.view()
 
 
 @app.post("/runs")
@@ -109,6 +143,6 @@ async def get_skill(name: str):
 
 @app.on_event("startup")
 async def _startup():
-    logging.getLogger("agent").info("Agent started: mode=%s model=%s skills=%s", config.llm_mode(),
-                                    config.LLM_MODEL, ", ".join(skills.load_all()))
-    asyncio.get_running_loop()
+    logging.getLogger("agent").info("Agent started: mode=%s model=%s skills=%s auto=%s", config.llm_mode(),
+                                    config.LLM_MODEL, ", ".join(skills.load_all()), auto.STATE.enabled)
+    asyncio.create_task(auto.loop())

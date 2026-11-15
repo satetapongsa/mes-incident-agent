@@ -76,6 +76,8 @@ services:
       LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
       AGENT_MAX_TOOL_CALLS: ${AGENT_MAX_TOOL_CALLS:-12}
       AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-90}
+      AUTO_AGENT: ${AUTO_AGENT:-false}
+      AUTO_POLL_SEC: ${AUTO_POLL_SEC:-20}
     ports:
       - "8000:8000"
     volumes:
