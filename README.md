@@ -11,7 +11,7 @@ are analysed for Pareto, MTTR and recurring issues, and Python scripts automate 
 > transactions only imitate how those products work so the demo feels realistic.
 
 Tech: **Python** (agent, MCP server, simulator, scripts) · **C#** .NET 8 Minimal API + Dapper · **Oracle 23ai PL/SQL** ·
-**GenAI** (Grok via xAI API, with an offline mock planner) · **MCP** (official Python SDK, streamable HTTP) ·
+**GenAI** (Groq by default - any OpenAI-compatible API such as xAI Grok works - with an offline mock planner) · **MCP** (official Python SDK, streamable HTTP) ·
 **Agent Skills** (`SKILL.md`) · **Next.js 15 + Tailwind + Recharts**.
 
 ## Architecture
@@ -23,7 +23,7 @@ flowchart LR
     W -->|runs, SSE, verify,<br/>skills, report| A[agent<br/>FastAPI :8000]
     A -->|MCP streamable HTTP| M[mcp-server<br/>FastMCP :8100]
     A -->|run log, triage,<br/>status, resolve| R
-    A -.->|tool calling| G[(Grok / xAI API<br/>or mock planner)]
+    A -.->|tool calling| G[(LLM API: Groq / xAI<br/>or mock planner)]
     M -->|read tools,<br/>worklog, propose| R
     S[simulator<br/>heartbeats + failures] --> R
     R -->|PL/SQL packages only| O[(Oracle 23ai<br/>schema MESAPP)]
@@ -34,7 +34,7 @@ flowchart LR
 | `oracle` | `gvenzl/oracle-free:23-slim` | 1521 | Schema `MESAPP`, PL/SQL packages, views, seed data |
 | `remedy-api` | C# .NET 8 Minimal API, Dapper, Oracle.ManagedDataAccess.Core | 5080 | Remedy-style incident API + Opcenter-style MES API. Only calls PL/SQL packages. Swagger at `/swagger` |
 | `mcp-server` | Python 3.12, `mcp` SDK (FastMCP), streamable HTTP | 8100 | Tools that wrap remedy-api (`/mcp`) |
-| `agent` | Python 3.12 FastAPI, `openai` SDK, MCP client | 8000 | Agent loop, Skills, SSE trace, verify, analysis report |
+| `agent` | Python 3.12 FastAPI, `openai` SDK (OpenAI-compatible), MCP client | 8000 | Agent loop, Skills, SSE trace, verify, analysis report |
 | `simulator` | Python 3.12 | - | Equipment heartbeats every 30 s; random failure injection when `SIM_ENABLED=true` |
 | `web` | Next.js 15 App Router, TypeScript, Tailwind, Recharts | 3000 | Dashboard. The browser only talks to Next.js `/api/*` |
 
@@ -65,10 +65,10 @@ docker compose down -v && docker compose up -d --build
 | `ORACLE_APP_PASSWORD` | `MesApp_2026` | oracle, remedy-api | Password of schema user `MESAPP` |
 | `ORACLE_PORT` | `1521` | oracle | Host port for SQL clients |
 | `SERVICE_TOKEN` | `change-me-service-token` | all internal services | `X-Service-Token` for remedy-api write endpoints |
-| `LLM_MODE` | `auto` | agent | `auto` = Grok when a key is set, else mock · `mock` · `llm` |
-| `XAI_API_KEY` | empty | agent only | xAI API key. Never sent to the browser |
-| `XAI_MODEL` | `grok-4` | agent | Grok model name (check https://docs.x.ai for current names) |
-| `XAI_BASE_URL` | `https://api.x.ai/v1` | agent | Any OpenAI-compatible endpoint works |
+| `LLM_MODE` | `auto` | agent | `auto` = LLM when a key is set, else mock · `mock` |
+| `LLM_API_KEY` | empty | agent only | API key (Groq: https://console.groq.com/keys). Never sent to the browser |
+| `LLM_MODEL` | `openai/gpt-oss-20b` | agent | Model name of the provider |
+| `LLM_BASE_URL` | `https://api.groq.com/openai/v1` | agent | Any OpenAI-compatible endpoint. xAI Grok: `https://api.x.ai/v1` + `LLM_MODEL=grok-4` |
 | `AGENT_MAX_TOOL_CALLS` | `12` | agent | Tool-call budget per run |
 | `AGENT_TIMEOUT_SEC` | `90` | agent | Timeout per run |
 | `SIM_ENABLED` | `false` | simulator | Inject random failures automatically |
@@ -76,7 +76,11 @@ docker compose down -v && docker compose up -d --build
 
 **Mock mode** (no API key) is a deterministic rule-based planner. It follows the same SKILL.md steps, calls the same
 MCP tools and makes the same kind of proposals, so the whole demo works offline. In LLM mode, if the API fails
-(bad key, network, model name), the run falls back to the mock planner instead of breaking.
+(bad key, network, model name, time budget used up), the run falls back to the mock planner instead of breaking.
+
+**Groq free tier:** every model is limited to 8,000 tokens per minute. The agent keeps prompts small (it first picks a
+skill from names only, then gets only the tools that skill uses, and tool results are compacted), and when Groq answers
+429 the trace shows "rate limit reached - waiting N s". A run takes about 5-70 s on the free tier.
 
 ## How the agent works
 
@@ -122,12 +126,14 @@ Plus `incident-triage` and `recurring-issue-review` (problem management report o
 ## Demo walkthrough
 
 1. Open http://localhost:3000 - KPIs, Pareto, 30-day trend, recurring equipment (WB-03 interface timeouts, TS-02 heartbeats).
-2. **MES** page -> click **Inject `lot-hold-stuck`** -> a ticket link appears.
-3. Open the ticket -> **Run Agent** -> watch the trace: triage -> similar incidents -> skill `lot-hold-stuck` loaded ->
+2. **Shop floor** page -> failure simulator -> **Lot stays on hold after SPC review** -> a ticket link appears.
+   (You can also open a ticket yourself: **Incidents -> New incident**.)
+3. Open the ticket -> **Run agent** -> watch the trace: triage -> similar incidents -> skill `lot-hold-stuck` loaded ->
    `get_lot` / `get_lot_history` -> proposal `release_lot_hold`.
-4. **Approve** -> the lot is `Waiting` on `/mes`, the ticket is `Resolved` with root cause, `/audit` shows the entries.
+4. **Approve and execute** -> the lot is `Waiting` on the shop floor, the ticket is `Resolved` with root cause, the audit log shows every step.
+   Tickets without a skill can be closed by a person with **Resolve manually**.
 5. Repeat with `trackin-recipe-mismatch` (recipe loaded -> resolved) and `db-slow-query` (escalated to DBA, stays open).
-6. `/analysis` -> **Generate improvement report**. `/skills` shows every SKILL.md.
+6. **Analysis** -> **Improvement report**. **Agent skills** shows every SKILL.md.
 
 ## Automation scripts
 
