@@ -44,6 +44,9 @@ export const RULES: Rule[] = [
   { method: "GET", re: /^skills(\/[\w-]+)?$/, target: "agent", to: (p) => `/${p}` },
   { method: "POST", re: /^analysis\/recurring$/, target: "agent", to: (p) => `/${p}` },
   { method: "GET", re: /^system$/, target: "agent", to: () => `/health` },
+  { method: "GET", re: /^status$/, target: "agent", to: () => `/status` },
+  { method: "GET", re: /^auto$/, target: "agent", to: () => `/auto` },
+  { method: "POST", re: /^auto$/, target: "agent", to: () => `/auto` },
 ];
 
 export function base(t: Target) {

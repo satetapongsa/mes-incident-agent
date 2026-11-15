@@ -3,10 +3,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
-  BarChart3, BookOpen, ClipboardCheck, Cpu, Factory, LayoutDashboard, Menu, ScrollText, TicketCheck, UserRound, X,
-  type LucideIcon,
+  BarChart3, BookOpen, Bot, BrainCircuit, ClipboardCheck, Database, Factory, LayoutDashboard, Menu, ScrollText, TicketCheck,
+  UserRound, Wrench, X, type LucideIcon,
 } from "lucide-react";
-import { useApi, useUser } from "@/lib/api";
+import { post, useApi, useUser } from "@/lib/api";
 
 const NAV: [string, string, LucideIcon][] = [
   ["/", "Dashboard", LayoutDashboard],
@@ -18,23 +18,64 @@ const NAV: [string, string, LucideIcon][] = [
   ["/audit", "Audit log", ScrollText],
 ];
 
-interface Sys { llm_mode: string; model?: string | null; provider: string }
+interface AutoView { enabled: boolean; current_incident: string | null; handled_count: number; last_error: string | null }
+interface Status {
+  database: boolean; mcp_server: boolean; agent: boolean; llm_mode: string; provider: string; model: string | null; auto: AutoView;
+}
+
+function Light({ ok, icon: Icon, label, detail }: { ok: boolean | null; icon: LucideIcon; label: string; detail?: string }) {
+  return (
+    <div className="flex items-center gap-2 text-sm" title={detail}>
+      <span className={`h-2 w-2 shrink-0 rounded-full ${ok === null ? "bg-zinc-600" : ok ? "bg-emerald-500" : "bg-rose-500"}`} />
+      <Icon className="h-4 w-4 shrink-0 text-zinc-500" />
+      <span className="truncate text-zinc-300">{label}</span>
+    </div>
+  );
+}
 
 function SystemStatus() {
-  const { data: sys, error } = useApi<Sys>("system", 30000);
-  const ok = !!sys && !error;
+  const { data: st, error, reload } = useApi<Status>("status", 10000);
+  const [busy, setBusy] = useState(false);
+  const up = st && !error;
+  const auto = st?.auto;
+
+  async function toggle() {
+    if (!auto) return;
+    setBusy(true);
+    try {
+      await post("auto", { enabled: !auto.enabled });
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <div className="rounded-md border border-line bg-ink p-3">
-      <div className="label mb-2">Agent</div>
-      <div className="flex items-center gap-2 text-sm">
-        <span className={`h-2 w-2 rounded-full ${ok ? "bg-emerald-500" : error ? "bg-rose-500" : "bg-zinc-600"}`} />
-        <Cpu className="h-4 w-4 text-zinc-500" />
-        <span className="font-medium text-zinc-200">
-          {error ? "Offline" : !sys ? "..." : sys.llm_mode === "llm" ? sys.provider : "Mock planner"}
-        </span>
-      </div>
-      {sys?.llm_mode === "llm" && sys.model && <div className="mono mt-1 truncate text-zinc-500" title={sys.model}>{sys.model}</div>}
-      {sys?.llm_mode === "mock" && <div className="mt-1 text-xs text-zinc-500">offline, rule-based</div>}
+    <div className="space-y-2 rounded-md border border-line bg-ink p-3">
+      <div className="label">System</div>
+      <Light ok={up ? st!.database : error ? false : null} icon={Database} label="Oracle + Remedy API" />
+      <Light ok={up ? st!.mcp_server : error ? false : null} icon={Wrench} label="MCP tools" />
+      <Light ok={up ? true : error ? false : null} icon={BrainCircuit}
+             label={!st ? "Agent" : st.llm_mode === "llm" ? `Agent: ${st.provider}` : "Agent: mock"}
+             detail={st?.model ?? "rule-based planner, works offline"} />
+      {st?.model && <div className="mono truncate pl-10 text-zinc-500" title={st.model}>{st.model}</div>}
+      {auto && (
+        <div className="border-t border-line pt-2">
+          <button onClick={toggle} disabled={busy} className="flex w-full items-center gap-2 text-left text-sm"
+                  title="When on, the agent analyses every New ticket by itself. Fixes still need your approval.">
+            <Bot className={`h-4 w-4 ${auto.enabled ? "text-accent" : "text-zinc-500"}`} />
+            <span className="flex-1 text-zinc-300">Auto mode</span>
+            <span className={`relative h-5 w-9 rounded-full transition-colors ${auto.enabled ? "bg-accent" : "bg-zinc-700"}`}>
+              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${auto.enabled ? "left-[18px]" : "left-0.5"}`} />
+            </span>
+          </button>
+          <div className="mt-1 text-xs text-zinc-500">
+            {!auto.enabled ? "Off - press Run agent on a ticket" : auto.current_incident
+              ? <>Working on <Link href={`/incidents/${auto.current_incident}`} className="mono text-accent">{auto.current_incident}</Link></>
+              : `On - watching new tickets (${auto.handled_count} done)`}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
