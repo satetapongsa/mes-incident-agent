@@ -33,6 +33,7 @@ export const RULES: Rule[] = [
   // human writes to remedy-api (token added here, server side)
   { method: "POST", re: /^incidents$/, target: "remedy", to: (p) => `/api/${p}`, token: true },
   { method: "POST", re: /^incidents\/INC\d{9}\/worklogs$/i, target: "remedy", to: (p) => `/api/${p}`, token: true },
+  { method: "POST", re: /^incidents\/INC\d{9}\/resolve$/i, target: "remedy", to: (p) => `/api/${p}`, token: true },
   { method: "POST", re: /^simulate\/[a-z-]+$/, target: "remedy", to: (p) => `/api/${p}`, token: true },
   { method: "POST", re: /^actions\/\d+\/reject$/, target: "remedy", to: (p) => `/api/${p}`, token: true },
   { method: "POST", re: /^actions\/\d+\/approve$/, target: "remedy", to: (p) => `/api/${p}`, token: true, composite: "approve" },
