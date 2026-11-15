@@ -138,7 +138,8 @@ def diagnose_messages(incident: dict, triage: dict, entities: dict, similar: lis
             "You are the MES incident agent for a semiconductor backend site. Follow the runbook below.\n"
             f"{SAFETY}\n\n"
             "Procedure: collect evidence with the read tools (call several in one turn when you can), then call "
-            "add_worklog once (short markdown: root cause hypothesis + evidence bullets), then propose_action once. "
+            "add_worklog once (short markdown: root cause hypothesis + evidence bullets) BEFORE propose_action, "
+            "then propose_action once. "
             "Finish with only JSON {\"root_cause\": \"...\", \"summary\": \"...\"}. "
             f"You have {calls_left} tool calls left.\n\n=== RUNBOOK {skill.name} ===\n{skill.body}")},
         {"role": "user", "content": (

@@ -222,6 +222,16 @@ async def _llm_diagnose(ctx: RunContext) -> None:
     if ctx.proposal:
         ctx.summary = data.get("summary") or (f"Proposed {ctx.proposal.get('action_type')} "
                                               f"{json.dumps(ctx.proposal.get('params'), ensure_ascii=False)}")
+        if not ctx.worklog_written:  # the LLM skipped step 6: write the analysis worklog from its proposal
+            reason = next((json.loads(tc["function"]["arguments"]).get("reason", "")
+                           for m in messages for tc in (m.get("tool_calls") or [])
+                           if tc["function"]["name"] == "propose_action"), "")
+            evidence = [f"{m['content'][:300]}" for m in messages if m.get("role") == "tool"][:4]
+            d = Decision(root_cause=ctx.root_cause or reason, action_type=ctx.proposal.get("action_type", ""),
+                         params=ctx.proposal.get("params") or {}, risk=ctx.proposal.get("risk", ""), reason=reason,
+                         evidence=evidence)
+            await ctx.call("add_worklog", {"incident_id": ctx.incident_id, "text": _worklog_text(ctx, d),
+                                           "log_type": "agent_analysis"}, final=True)
     else:
         ctx.summary = data.get("summary") or final_text[:500]
         group = ctx.triage.get("assigned_group") or "MES Application Support"
