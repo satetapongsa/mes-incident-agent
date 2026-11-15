@@ -1,0 +1,135 @@
+name: mes-incident-agent
+
+x-service-env: &service-env
+  REMEDY_API_URL: http://remedy-api:5080
+  SERVICE_TOKEN: ${SERVICE_TOKEN:-change-me-service-token}
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: mia-oracle
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_SYS_PASSWORD:-OracleSys_2026}
+      APP_USER: MESAPP
+      APP_USER_PASSWORD: ${ORACLE_APP_PASSWORD:-MesApp_2026}
+    ports:
+      - "${ORACLE_PORT:-1521}:1521"
+    volumes:
+      - oracle_mes_data:/opt/oracle/oradata
+      - ./db/init:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
+
+  remedy-api:
+    build: ./remedy-api
+    container_name: mia-remedy-api
+    environment:
+      ORACLE_CONN: "User Id=MESAPP;Password=${ORACLE_APP_PASSWORD:-MesApp_2026};Data Source=oracle:1521/FREEPDB1;Connection Timeout=30"
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-change-me-service-token}
+      ASPNETCORE_URLS: http://0.0.0.0:5080
+      Logging__LogLevel__Default: Information
+      Logging__LogLevel__Microsoft.AspNetCore: Warning
+    ports:
+      - "5080:5080"
+    depends_on:
+      oracle:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:5080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  mcp-server:
+    build: ./mcp-server
+    container_name: mia-mcp-server
+    environment:
+      <<: *service-env
+      MCP_PORT: "8100"
+    ports:
+      - "8100:8100"
+    depends_on:
+      remedy-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/health', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  agent:
+    build: ./agent
+    container_name: mia-agent
+    environment:
+      <<: *service-env
+      MCP_URL: http://mcp-server:8100/mcp
+      LLM_MODE: ${LLM_MODE:-auto}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      XAI_MODEL: ${XAI_MODEL:-grok-4}
+      XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
+      AGENT_MAX_TOOL_CALLS: ${AGENT_MAX_TOOL_CALLS:-12}
+      AGENT_TIMEOUT_SEC: ${AGENT_TIMEOUT_SEC:-90}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./reports:/app/reports
+    depends_on:
+      remedy-api:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  simulator:
+    build: ./simulator
+    container_name: mia-simulator
+    environment:
+      <<: *service-env
+      SIM_ENABLED: ${SIM_ENABLED:-false}
+      SIM_INTERVAL_SEC: ${SIM_INTERVAL_SEC:-300}
+      HEARTBEAT_INTERVAL_SEC: "30"
+    depends_on:
+      remedy-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(0 if time.time() - os.path.getmtime('/tmp/simulator.alive') < 120 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build: ./web
+    container_name: mia-web
+    environment:
+      <<: *service-env
+      AGENT_URL: http://agent:8000
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      remedy-api:
+        condition: service_healthy
+      agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+volumes:
+  oracle_mes_data:
