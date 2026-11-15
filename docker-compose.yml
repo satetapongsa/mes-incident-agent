@@ -8,6 +8,7 @@ services:
   oracle:
     image: gvenzl/oracle-free:23-slim
     container_name: mia-oracle
+    restart: unless-stopped
     environment:
       ORACLE_PASSWORD: ${ORACLE_SYS_PASSWORD:-OracleSys_2026}
       APP_USER: MESAPP
@@ -27,6 +28,7 @@ services:
   remedy-api:
     build: ./remedy-api
     container_name: mia-remedy-api
+    restart: unless-stopped
     environment:
       ORACLE_CONN: "User Id=MESAPP;Password=${ORACLE_APP_PASSWORD:-MesApp_2026};Data Source=oracle:1521/FREEPDB1;Connection Timeout=30"
       SERVICE_TOKEN: ${SERVICE_TOKEN:-change-me-service-token}
@@ -48,6 +50,7 @@ services:
   mcp-server:
     build: ./mcp-server
     container_name: mia-mcp-server
+    restart: unless-stopped
     environment:
       <<: *service-env
       MCP_PORT: "8100"
@@ -66,6 +69,7 @@ services:
   agent:
     build: ./agent
     container_name: mia-agent
+    restart: unless-stopped
     environment:
       <<: *service-env
       MCP_URL: http://mcp-server:8100/mcp
@@ -97,6 +101,7 @@ services:
   simulator:
     build: ./simulator
     container_name: mia-simulator
+    restart: unless-stopped
     environment:
       <<: *service-env
       SIM_ENABLED: ${SIM_ENABLED:-false}
@@ -115,6 +120,7 @@ services:
   web:
     build: ./web
     container_name: mia-web
+    restart: unless-stopped
     environment:
       <<: *service-env
       AGENT_URL: http://agent:8000
