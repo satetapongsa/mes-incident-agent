@@ -13,6 +13,8 @@ import json
 import logging
 from typing import Any
 
+import openai
+
 from . import config, hub, llm, remedy, skills
 from .mcp_client import McpTools, ToolError, connect
 from .mock_planner import PLANNERS, Decision, escalate
@@ -131,26 +133,49 @@ async def _mock_diagnose(ctx: RunContext) -> None:
     await _propose(ctx, d)
 
 
+async def _chat(ctx: RunContext, client, **kw):
+    """One LLM call. Rate limits (429) are shown in the trace and waited out instead of failing the run."""
+    for _ in range(8):
+        try:
+            return await client.chat.completions.create(model=config.LLM_MODEL, **config.llm_extra(), **kw)
+        except openai.RateLimitError as e:
+            try:
+                wait = float(e.response.headers.get("retry-after", "6"))
+            except (AttributeError, ValueError):
+                wait = 6.0
+            wait = min(max(wait, 1.0), 30.0)
+            await ctx.think(f"{config.llm_provider()} rate limit reached (free tier tokens/minute) - waiting {wait:.0f} s.")
+            await asyncio.sleep(wait)
+    raise RuntimeError("LLM rate limit did not clear")
+
+
 async def _llm_diagnose(ctx: RunContext) -> None:
-    client = llm.client()
-    tools = llm.openai_tools(ctx.mcp.tools)
-    similar = [{k: s.get(k) for k in ("incident_id", "summary", "root_cause", "resolution", "score")} for s in ctx.similar[:3]]
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": llm.system_prompt(config.MAX_TOOL_CALLS)},
-        {"role": "user", "content": (
-            f"Incident {ctx.incident_id}.\n{llm.ticket_block(ctx.incident)}\n\n"
-            f"Triage result: {json.dumps(ctx.triage)}\n"
-            f"Entities found: {json.dumps(ctx.entities)}\n"
-            f"Similar resolved incidents: {json.dumps(similar, default=str)}\n"
-            f"Tool calls used so far: {ctx.tool_calls}")},
-    ]
+    client = llm.client(max_retries=0)
+
+    # Phase 1 - the LLM only sees skill names + descriptions and must pick one (progressive loading)
+    resp = await _chat(ctx, client, messages=llm.choose_skill_messages(ctx.incident, ctx.triage, ctx.similar),
+                       response_format={"type": "json_object"}, temperature=0)
+    pick = llm.first_json(resp.choices[0].message.content or "") or {}
+    name = str(pick.get("skill", "none")).strip()
+    await ctx.think(f"LLM chose skill: {name}" + (f" - {pick['reason']}" if pick.get("reason") else ""))
+    if name not in llm.REMEDIATION_SKILLS:
+        await ctx.think("No runbook skill fits -> safe default (escalate to the triaged group).")
+        await _mock_diagnose(ctx)
+        return
+    skill = await ctx.load_skill(name)
+
+    # Phase 2 - follow the skill with only the tools it mentions
+    names = llm.skill_tool_names(skill, {t.name for t in ctx.mcp.tools})
+    tools = llm.openai_tools(ctx.mcp.tools, names)
+    await ctx.think(f"Tools given to the LLM for this skill: {', '.join(sorted(names))}")
+    messages = llm.diagnose_messages(ctx.incident, ctx.triage, ctx.entities, ctx.similar, skill,
+                                     config.MAX_TOOL_CALLS - ctx.tool_calls)
     final_text = ""
-    for _ in range(20):
-        resp = await client.chat.completions.create(model=config.XAI_MODEL, messages=messages, tools=tools,
-                                                    tool_choice="auto", temperature=0.1)
+    for _ in range(12):
+        resp = await _chat(ctx, client, messages=messages, tools=tools, tool_choice="auto", temperature=0.1)
         msg = resp.choices[0].message
-        if msg.content and msg.content.strip():
-            await ctx.think(msg.content.strip()[:2000])
+        if msg.content and msg.content.strip() and msg.tool_calls:
+            await ctx.think(msg.content.strip()[:1500])
         if not msg.tool_calls:
             final_text = msg.content or ""
             break
@@ -160,24 +185,22 @@ async def _llm_diagnose(ctx: RunContext) -> None:
                                         for tc in msg.tool_calls]})
         stop = False
         for tc in msg.tool_calls:
-            name = tc.function.name
+            tname = tc.function.name
             try:
                 args = json.loads(tc.function.arguments or "{}")
             except ValueError:
                 args = {}
             try:
-                if name == "load_skill":
-                    s = await ctx.load_skill(str(args.get("name", "")))
-                    result: dict = {"skill": s.name, "content": s.body} if s else \
-                        {"error": f"unknown skill; choose one of {[x['name'] for x in skills.catalog()]}"}
-                elif name in llm.WRITE_TOOLS:
+                if tname not in names:
+                    result: dict = {"error": f"tool {tname} is not available for this skill"}
+                elif tname in llm.WRITE_TOOLS:
                     args["incident_id"] = ctx.incident_id  # the agent may only write to its own incident
-                    if name == "propose_action":
+                    if tname == "propose_action":
                         if ctx.proposal:
                             result = {"error": "A proposal already exists for this run; only one is allowed."}
                         else:
                             args["run_id"] = ctx.run_id
-                            result = await ctx.call(name, args, final=True)
+                            result = await ctx.call(tname, args, final=True)
                             if "error" not in result:
                                 ctx.proposal = result
                                 await ctx.emit("proposal", {"action_id": result.get("action_id"),
@@ -185,20 +208,22 @@ async def _llm_diagnose(ctx: RunContext) -> None:
                                                             "params": result.get("params"), "risk": result.get("risk"),
                                                             "reason": args.get("reason"), "status": "Pending"})
                     else:
-                        result = await ctx.call(name, args, final=True)
+                        result = await ctx.call(tname, args, final=True)
                         ctx.worklog_written = ctx.worklog_written or "error" not in result
                 else:
-                    result = await ctx.call(name, args)
+                    result = await ctx.call(tname, args)
             except ToolLimitReached as e:
                 result, stop = {"error": str(e)}, True
-            messages.append({"role": "tool", "tool_call_id": tc.id,
-                             "content": json.dumps(result, default=str, ensure_ascii=False)[:8000]})
-        if stop:
-            break
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": llm.compact(result)})
+        if stop or ctx.proposal:
+            break  # proposal created: skip one more LLM round trip (saves tokens), summarise from the run
     data = llm.first_json(final_text) or {}
-    ctx.root_cause = data.get("root_cause") or ctx.root_cause or final_text[:500] or None
-    ctx.summary = data.get("summary") or final_text[:500]
-    if not ctx.proposal:  # the LLM did not propose: hand over safely
+    ctx.root_cause = data.get("root_cause") or ctx.root_cause or _root_from_worklog(messages)
+    if ctx.proposal:
+        ctx.summary = data.get("summary") or (f"Proposed {ctx.proposal.get('action_type')} "
+                                              f"{json.dumps(ctx.proposal.get('params'), ensure_ascii=False)}")
+    else:
+        ctx.summary = data.get("summary") or final_text[:500]
         group = ctx.triage.get("assigned_group") or "MES Application Support"
         await ctx.think(f"LLM finished without a proposal -> escalate to {group} (safe default).")
         d = escalate(group, ctx.root_cause or "Not determined by the agent",
@@ -206,6 +231,23 @@ async def _llm_diagnose(ctx: RunContext) -> None:
         if not ctx.worklog_written:
             await ctx.call("add_worklog", {"incident_id": ctx.incident_id, "text": _worklog_text(ctx, d)}, final=True)
         await _propose(ctx, d)
+
+
+def _root_from_worklog(messages: list[dict]) -> str | None:
+    """Take the root-cause line from the worklog the LLM wrote, if any."""
+    for m in messages:
+        for tc in m.get("tool_calls", []) or []:
+            if tc["function"]["name"] != "add_worklog":
+                continue
+            try:
+                text = json.loads(tc["function"]["arguments"]).get("text", "")
+            except ValueError:
+                continue
+            for line in text.splitlines():
+                if "root cause" in line.lower():
+                    return line.split(":", 1)[-1].strip(" *") or None
+            return text[:300] or None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -258,13 +300,16 @@ async def _run(ctx: RunContext) -> None:
 
     # 4-7. choose skill, diagnose, worklog, proposal
     if ctx.mode == "llm" and not ctx.triage.get("injection_suspected"):
+        budget = max(config.TIMEOUT_SEC - 20, 20)  # keep time for the mock fallback
         try:
-            await _llm_diagnose(ctx)
+            await asyncio.wait_for(_llm_diagnose(ctx), timeout=budget)
         except ToolLimitReached:
             raise
-        except Exception as e:  # noqa: BLE001  (API down, bad model name, ...)
-            log.exception("LLM loop failed")
-            await ctx.emit("error", {"text": f"LLM failed ({type(e).__name__}: {str(e)[:200]}). Falling back to mock planner."})
+        except Exception as e:  # noqa: BLE001  (API down, bad key, rate limit, LLM time budget used up)
+            log.warning("LLM loop failed: %r", e)
+            why = (f"LLM time budget of {budget} s used up" if isinstance(e, asyncio.TimeoutError)
+                   else f"{type(e).__name__}: {str(e)[:200]}")
+            await ctx.emit("error", {"text": f"LLM failed ({why}). Falling back to mock planner."})
             if not ctx.proposal:
                 ctx.mode = "mock"
                 await _mock_diagnose(ctx)
@@ -321,7 +366,7 @@ async def start_run(incident_id: str, mode: str | None = None) -> dict:
         rid = hub.ACTIVE_BY_INCIDENT[incident_id]
         return {"run_id": rid, "incident_id": incident_id, "status": "Running", "already_running": True}
     mode = mode if mode in ("llm", "mock") else config.llm_mode()
-    if mode == "llm" and not config.XAI_API_KEY:
+    if mode == "llm" and not config.LLM_API_KEY:
         mode = "mock"
     run = await remedy.post("/api/agent/runs", {"incident_id": incident_id, "llm_mode": mode})
     rid = int(run["run_id"])
